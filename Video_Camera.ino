@@ -3,7 +3,10 @@
 // Summary:  Motion triggered video camera that saves AVI files to SD card.
 // Author:   Paul Ibbotson (paul.w.ibbbotson@gmail.com)
 // Versions: 0.90 01-Jan-22 Initial version
+//           0.91 15-Jan-22 Add WiFi access to get time for file timestamps (optional)
 //           
+// Future:   Play around with the camera settings to get best picture quality.
+//           Create custom PCB to hold ESP32-CAM, PIR sensor, & 3.3v power supply.                 
 // 
 // Overview:
 //  Based on ESP32-CAM AI Thinker board. 
@@ -12,6 +15,7 @@
 //   Core 1 is used to: retrieve frames from memory and create the AVI file on the SD card.
 //  The on board flash LED is (stupidly) connected to GPIO4.  This pin is used by the SD card so will flash when accessing - recommend disconnecting the driving transistor.
 //  PIR sensor is connected to GPIO3.  This is the RX for the serial connection.  The sensor should be disconnected when uploding the sketch to avoid issues.
+//  I decided to go with S-VGA (800x600) resolution rather the XUGA (1600x1200) to be able to handle more fps, and ceate smaller files on the SD card.
 // 
 //  It is useful to understand the AVI file format - Below is a summary (based on my understanding).
 //  There are a number of fields in the file that need to be updated once sizes are known - these are highlighted below. 
@@ -76,7 +80,7 @@
 #include "esp_vfs_fat.h"                     // SD card library
 #include <EEPROM.h>                          // Used to store the file number.
  
-#include <WiFi.h>                            // Used to connect to WiFi to get the time via NTP
+#include <WiFi.h>                            // Used to connect to WiFi to get the time via NTP.
 #include <ESP32Time.h>                       // Used to set the internal RTC, so the timestamp of AVI files is correct.
 
 #define PWDN_GPIO_NUM     32                 // Pins for CAMERA_MODEL_AI_THINKER
@@ -105,9 +109,9 @@ const long unsigned MOTION_DELAY    = 15000; // Time (ms) after motion last dete
 
 const long unsigned FRAME_INTERVAL  = 250;   // Time (ms) between frame captures 
 const uint8_t       JPEG_QUALITY    = 10;    // JPEG quality (0-63).
-const uint8_t       MAX_FRAMES      = 5;     // Maximum number of frames we hold at any time
+const uint8_t       MAX_FRAMES      = 10;    // Maximum number of frames we hold at any time
 
-const uint16_t      WIFI_TIMEOUT    = 20000; // Try to connect to WiFi for this long, then give up.
+const long unsigned WIFI_TIMEOUT    = 20000; // Try to connect to WiFi for this long, then give up.
 
 const byte buffer00dc   [4]  = {0x30, 0x30, 0x64, 0x63}; // "00dc"
 const byte buffer0000   [4]  = {0x00, 0x00, 0x00, 0x00}; // 0x00000000
@@ -127,7 +131,7 @@ const byte aviHeader[AVI_HEADER_SIZE] =      // This is the AVI file header.  So
 
   0x61, 0x76, 0x69, 0x68,  // 0x08 "avih"    fcc
   0x38, 0x00, 0x00, 0x00,  // 0x0C 56        Structure length
-  0x90, 0xD0, 0x03, 0x00,  // 0x20 300000    dwMicroSecPerFrame     [based on FRAME_INTERVAL] 
+  0x90, 0xD0, 0x03, 0x00,  // 0x20 250000    dwMicroSecPerFrame     [based on FRAME_INTERVAL] 
   0x00, 0x00, 0x00, 0x00,  // 0x24           dwMaxBytesPerSec       [gets updated later] 
   0x00, 0x00, 0x00, 0x00,  // 0x28 0         dwPaddingGranularity
   0x10, 0x00, 0x00, 0x00,  // 0x2C 0x10      dwFlags - AVIF_HASINDEX set.
@@ -135,10 +139,8 @@ const byte aviHeader[AVI_HEADER_SIZE] =      // This is the AVI file header.  So
   0x00, 0x00, 0x00, 0x00,  // 0x34 0         dwInitialFrames (used for interleaved files only)
   0x01, 0x00, 0x00, 0x00,  // 0x38 1         dwStreams (just video)
   0x00, 0x00, 0x00, 0x00,  // 0x3C 0         dwSuggestedBufferSize
-  0x20, 0x03, 0x00, 0x00,  // 0x40 800      dwWidth - 800 (S-VGA)  [based on FRAMESIZE] 
-  0x58, 0x02, 0x00, 0x00,  // 0x44 600      dwHeight - 600 (S-VGA) [based on FRAMESIZE]    
-//  0x40, 0x06, 0x00, 0x00,  // 0x40 1600      dwWidth - 1600 (XUGA)  [based on FRAMESIZE] 
-//  0xb0, 0x04, 0x00, 0x00,  // 0x44 1200      dwHeight - 1200 (XUGA) [based on FRAMESIZE]   
+  0x20, 0x03, 0x00, 0x00,  // 0x40 800       dwWidth - 800 (S-VGA)  [based on FRAMESIZE] 
+  0x58, 0x02, 0x00, 0x00,  // 0x44 600       dwHeight - 600 (S-VGA) [based on FRAMESIZE]      
   0x00, 0x00, 0x00, 0x00,  // 0x48           dwReserved
   0x00, 0x00, 0x00, 0x00,  // 0x4C           dwReserved
   0x00, 0x00, 0x00, 0x00,  // 0x50           dwReserved
@@ -157,7 +159,7 @@ const byte aviHeader[AVI_HEADER_SIZE] =      // This is the AVI file header.  So
   0x00, 0x00,              // 0x7A           wLanguage - not set
   0x00, 0x00, 0x00, 0x00,  // 0x7C           dwInitialFrames
   0x01, 0x00, 0x00, 0x00,  // 0x80 1         dwScale
-  0x02, 0x00, 0x00, 0x00,  // 0x84 2         dwRate (frames per second)         [based on FRAME_INTERVAL]         
+  0x04, 0x00, 0x00, 0x00,  // 0x84 4         dwRate (frames per second)         [based on FRAME_INTERVAL]         
   0x00, 0x00, 0x00, 0x00,  // 0x88           dwStart               
   0x00, 0x00, 0x00, 0x00,  // 0x8C           dwLength (frame count)             [gets updated later]
   0x00, 0x00, 0x00, 0x00,  // 0x90           dwSuggestedBufferSize
@@ -167,14 +169,12 @@ const byte aviHeader[AVI_HEADER_SIZE] =      // This is the AVI file header.  So
   0x73, 0x74, 0x72, 0x66,  // 0x9C "strf"    Stream format header
   0x28, 0x00, 0x00, 0x00,  // 0xA0 40        Structure length
   0x28, 0x00, 0x00, 0x00,  // 0xA4 40        BITMAPINFOHEADER length (same as above)
-  0x20, 0x03, 0x00, 0x00,  // 0xA8 800      Width                  [based on FRAMESIZE] 
-  0x58, 0x02, 0x00, 0x00,  // 0xAC 600      Height                 [based on FRAMESIZE] 
-//  0x40, 0x06, 0x00, 0x00,  // 0xA8 1600      Width                  [based on FRAMESIZE] 
-//  0xb0, 0x04, 0x00, 0x00,  // 0xAC 1200      Height                 [based on FRAMESIZE] 
+  0x20, 0x03, 0x00, 0x00,  // 0xA8 800       Width                  [based on FRAMESIZE] 
+  0x58, 0x02, 0x00, 0x00,  // 0xAC 600       Height                 [based on FRAMESIZE] 
   0x01, 0x00,              // 0xB0 1         Planes  
   0x18, 0x00,              // 0xB2 24        Bit count (bit depth once uncompressed)                   
   0x4D, 0x4A, 0x50, 0x47,  // 0xB4 "MJPG"    Compression 
-  0x00, 0x84, 0x03, 0x00,  // 0xB8 230400    Size image ?                                    [what is this?]
+  0x00, 0x00, 0x04, 0x00,  // 0xB8 262144    Size image (approx?)                              [what is this?]
   0x00, 0x00, 0x00, 0x00,  // 0xBC           X pixels per metre 
   0x00, 0x00, 0x00, 0x00,  // 0xC0           Y pixels per metre
   0x00, 0x00, 0x00, 0x00,  // 0xC4           Colour indices used  
@@ -183,13 +183,13 @@ const byte aviHeader[AVI_HEADER_SIZE] =      // This is the AVI file header.  So
 
   0x49, 0x4E, 0x46, 0x4F, // 0xCB "INFO"
   0x1C, 0x00, 0x00, 0x00, // 0xD0 28         Structure length
-  0x70, 0x61, 0x75, 0x6c, // 0xD4 paul
-  0x2e, 0x77, 0x2e, 0x69, // 0xD8 .w.i
-  0x62, 0x62, 0x6f, 0x74, // 0xDC bbot
-  0x73, 0x6f, 0x6e, 0x40, // 0xE0 son@
-  0x67, 0x6d, 0x61, 0x69, // 0xE4 gmai
-  0x6c, 0x2e, 0x63, 0x6f, // 0xE8 l.co
-  0x6d, 0x00, 0x00, 0x00, // 0xEC m
+  0x70, 0x61, 0x75, 0x6c, // 0xD4 
+  0x2e, 0x77, 0x2e, 0x69, // 0xD8 
+  0x62, 0x62, 0x6f, 0x74, // 0xDC 
+  0x73, 0x6f, 0x6e, 0x40, // 0xE0 
+  0x67, 0x6d, 0x61, 0x69, // 0xE4 
+  0x6c, 0x2e, 0x63, 0x6f, // 0xE8 
+  0x6d, 0x00, 0x00, 0x00, // 0xEC 
 
   0x4C, 0x49, 0x53, 0x54, // 0xF0 "LIST"
   0x00, 0x00, 0x00, 0x00, // 0xF4           Total size of frames        [gets updated later]
@@ -267,6 +267,8 @@ void setup()
 
 
   // Get the current time from the Internet and initialise the ESP32's RTC. 
+  // This is not essential, and this can be commented out if not required.  The only impact is
+  // the files created will not have the correct timestamp.
   initialiseTime();
   
 
@@ -404,7 +406,6 @@ void initialiseCamera()
   config.xclk_freq_hz = 20000000;
 
                                          // The follow fields determine the size of the buffer required.
-//  config.frame_size   = FRAMESIZE_UXGA;  // 1600 x 1200. 90ms capture.
   config.frame_size   = FRAMESIZE_SVGA;  //  800 x  600. 40ms capture.
   config.jpeg_quality = JPEG_QUALITY;    // 0-63.  Only relevent if PIXFORMAT_JPEG format.  Very low may cause camera to crash at higher frame sizes.
   config.fb_count     = MAX_FRAMES;      // Maximum frames (depends on frame_size, jpeg_quality, frameDelay)
@@ -891,7 +892,7 @@ void writeIdx1Chunk()
 void initialiseTime()
 {
   const char *ssid               = "PK1";            // WiFi network to connect to.
-  const char *password           = "fordfalcon6938"; // Password.
+  const char *password           = "xxxxxxxxxxxxxx"; // Password.
   
   const char *ntpServer          = "pool.ntp.org";   // NTP server
   const long  gmtOffset_sec      = 13 * 60 * 60;     // New Zealand GMT (+13 hours)
@@ -910,7 +911,7 @@ void initialiseTime()
     Serial.print(".");
   }
 
-  if (WiFi.status() != WL_CONNECTED) 
+  if (WiFi.status() == WL_CONNECTED) 
   {
     Serial.println(" connected.");
   }
