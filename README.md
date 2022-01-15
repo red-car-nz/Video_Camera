@@ -1,2 +1,2 @@
-# Arduino
-Arduino repository
+# Video camera
+Video camera with PIR sensor
