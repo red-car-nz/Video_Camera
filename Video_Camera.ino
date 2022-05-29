@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------------------
 // Program:  Video_Camera 
 // Summary:  Motion triggered video camera that saves AVI files to SD card.
-// Author:   Paul Ibbotson (paul.w.ibbbotson@gmail.com)
+// Author:   Paul Ibbotson (paul.w.ibbotson@gmail.com)
 // Versions: 0.90 01-Jan-22 Initial version
 //           0.91 15-Jan-22 Add WiFi access to get time for file timestamps (optional)
 //           
