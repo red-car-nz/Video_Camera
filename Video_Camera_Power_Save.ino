@@ -5,7 +5,7 @@
 // Versions: 0.90 01-Jan-22 Initial version
 //           0.91 15-Jan-22 Add WiFi access to get time for file timestamps (optional)
 //                          Use 1 bit SD card bus, and use GPIO13 (instead of GPIO3) for the sensor, as this can be used for interupts (to wake from sleep).
-//           0.92 04-Feb-22 Power save verion. Sleeps, wakes up on motion sensor, takes movie, sleeps. 
+//           0.92 04-Feb-22 Power save version. Sleeps, wakes up on motion sensor, takes movie, sleeps. 
 //
 //
 //
@@ -946,7 +946,7 @@ void writeIdx1Chunk()
 void initialiseTime()
 {
   const char *ssid               = "PK1";            // WiFi network to connect to.
-  const char *password           = "fordfalcon6938"; // Password.
+  const char *password           = "xxxxxxxxxxxxxx"; // Password.
   
   const char *ntpServer          = "pool.ntp.org";   // NTP server.
   const long  gmtOffset_sec      = 13 * 60 * 60;     // New Zealand GMT (+13 hours).
