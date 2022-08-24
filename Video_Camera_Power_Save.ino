@@ -6,6 +6,7 @@
 //           0.91 15-Jan-22 Add WiFi access to get time for file timestamps (optional)
 //                          Use 1 bit SD card bus, and use GPIO13 (instead of GPIO3) for the sensor, as this can be used for interupts (to wake from sleep).
 //           0.92 04-Feb-22 Power save version. Sleeps, wakes up on motion sensor, takes movie, sleeps. 
+//           0.93 24-Aug-22 Resolve issue SDMMC_SLOT_CONFIG_DEFAULT not declared, caused by library changes. 
 //
 //
 //
@@ -83,8 +84,11 @@
 //  https://knowledgebase.progress.com/articles/Article/P129473  Timezones
 //
 
+
 #include "esp_camera.h"                      // Camera library
 #include "esp_vfs_fat.h"                     // SD card library
+#include "driver/sdmmc_host.h"               // SD card library
+
 #include <EEPROM.h>                          // Used to store the file number.
 #include <WiFi.h>                            // Used to connect to WiFi to get the time via NTP.
 #include <ESP32Time.h>                       // Used to set the internal RTC, so the timestamp of AVI files is correct.
@@ -541,7 +545,7 @@ void initialiseSDCard()
   Serial.println("Initialising SD card");
  
   sdmmc_host_t host = SDMMC_HOST_DEFAULT();
-
+ 
 //  host.max_freq_khz = SDMMC_FREQ_HIGHSPEED;
   
   sdmmc_slot_config_t slot_config = SDMMC_SLOT_CONFIG_DEFAULT();
@@ -553,6 +557,7 @@ void initialiseSDCard()
   {
     .format_if_mount_failed = false,
     .max_files = 2,
+    .allocation_unit_size = 16 * 1024
   };
   
   sdmmc_card_t *card;
@@ -946,7 +951,7 @@ void writeIdx1Chunk()
 void initialiseTime()
 {
   const char *ssid               = "PK1";            // WiFi network to connect to.
-  const char *password           = "xxxxxxxxxxxxxx"; // Password.
+  const char *password           = "fordfalcon6938"; // Password.
   
   const char *ntpServer          = "pool.ntp.org";   // NTP server.
   const long  gmtOffset_sec      = 13 * 60 * 60;     // New Zealand GMT (+13 hours).
@@ -985,7 +990,7 @@ void initialiseTime()
 
   
   // Check if the time is set.
-  struct tm timeinfo;
+  struct tm timeinfo = {0,0,0,0,0,0,0,0,0};
   while(!getLocalTime(&timeinfo) && millis() - ntpStart < NTP_TIMEOUT) 
   {
     delay(500);
